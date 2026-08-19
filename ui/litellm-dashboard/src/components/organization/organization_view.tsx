@@ -1,33 +1,30 @@
-import React, { useState, useEffect } from "react";
-import {
-  Card,
-  Title,
-  Text,
-  TextInput,
-  Tab,
-  TabList,
-  TabGroup,
-  TabPanel,
-  TabPanels,
-  Grid,
-  Badge,
-  Table,
-  TableHead,
-  TableRow,
-  TableHeaderCell,
-  TableBody,
-  TableCell,
-  Button as TremorButton,
-  Icon
-} from "@tremor/react";
-import NumericalInput from "../shared/numerical_input";
-import { Button, Form, Input, Select, message, Tooltip } from "antd";
-import { InfoCircleOutlined } from '@ant-design/icons';
-import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
-import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
-import { Member, Organization, organizationInfoCall, organizationMemberAddCall, organizationMemberUpdateCall, organizationMemberDeleteCall, organizationUpdateCall } from "../networking";
+import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
+import { organizationKeys, useOrganization } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
+import { useQueryClient } from "@tanstack/react-query";
+import { useVisitedTabs } from "@/hooks/useVisitedTabs";
+import { MoneyCell } from "@/components/shared/table_cells";
+import CopyButton from "@/components/shared/CopyButton";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { teamDetailHref } from "@/utils/entityLinks";
+import { createTeamAliasMap } from "@/utils/teamUtils";
+import { BadgeLink } from "@/components/shared/BadgeLink";
+import { ArrowLeft } from "lucide-react";
+import React, { useMemo, useState } from "react";
+import MemberTable, { type MemberTableColumn } from "../common_components/MemberTable";
 import UserSearchModal from "../common_components/user_search_modal";
-import MemberModal from "../team/edit_membership";
+import { toast } from "@/lib/toast";
+import {
+  Member,
+  organizationMemberAddCall,
+  organizationMemberDeleteCall,
+  organizationMemberUpdateCall,
+} from "../networking";
+import ObjectPermissionsView from "../object_permissions_view";
+import MemberModal from "../team/EditMembership";
+import { OrgSettingsForm } from "./org-settings/OrgSettingsForm";
 
 interface OrganizationInfoProps {
   organizationId: string;
@@ -46,35 +43,19 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
   is_org_admin,
   is_proxy_admin,
   userModels,
-  editOrg
+  editOrg,
 }) => {
-  const [orgData, setOrgData] = useState<Organization | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [form] = Form.useForm();
+  const queryClient = useQueryClient();
+  const { data: orgData, isLoading: loading } = useOrganization(organizationId);
   const [isEditing, setIsEditing] = useState(false);
   const [isAddMemberModalVisible, setIsAddMemberModalVisible] = useState(false);
   const [isEditMemberModalVisible, setIsEditMemberModalVisible] = useState(false);
   const [selectedEditMember, setSelectedEditMember] = useState<Member | null>(null);
-
   const canEditOrg = is_org_admin || is_proxy_admin;
+  const { data: teams } = useTeams();
+  const { onTabChange, hasVisited } = useVisitedTabs(editOrg ? "settings" : "overview");
 
-  const fetchOrgInfo = async () => {
-    try {
-      setLoading(true);
-      if (!accessToken) return;
-      const response = await organizationInfoCall(accessToken, organizationId);
-      setOrgData(response);
-    } catch (error) {
-      message.error("Failed to load organization information");
-      console.error("Error fetching organization info:", error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchOrgInfo();
-  }, [organizationId, accessToken]);
+  const teamAliasMap = useMemo(() => createTeamAliasMap(teams), [teams]);
 
   const handleMemberAdd = async (values: any) => {
     try {
@@ -86,15 +67,14 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
         user_email: values.user_email,
         user_id: values.user_id,
         role: values.role,
-      }
-      const response = await organizationMemberAddCall(accessToken, organizationId, member);
+      };
+      await organizationMemberAddCall(accessToken, organizationId, member);
 
-      message.success("Organization member added successfully");
+      toast.success("Organization member added successfully");
       setIsAddMemberModalVisible(false);
-      form.resetFields();
-      fetchOrgInfo();
+      queryClient.invalidateQueries({ queryKey: organizationKeys.all });
     } catch (error) {
-      message.error("Failed to add organization member");
+      toast.fromError("Failed to add organization member");
       console.error("Error adding organization member:", error);
     }
   };
@@ -107,15 +87,14 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
         user_email: values.user_email,
         user_id: values.user_id,
         role: values.role,
-      }
+      };
 
-      const response = await organizationMemberUpdateCall(accessToken, organizationId, member);
-      message.success("Organization member updated successfully");
+      await organizationMemberUpdateCall(accessToken, organizationId, member);
+      toast.success("Organization member updated successfully");
       setIsEditMemberModalVisible(false);
-      form.resetFields();
-      fetchOrgInfo();
+      queryClient.invalidateQueries({ queryKey: organizationKeys.all });
     } catch (error) {
-      message.error("Failed to update organization member");  
+      toast.fromError("Failed to update organization member");
       console.error("Error updating organization member:", error);
     }
   };
@@ -125,41 +104,12 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
       if (!accessToken) return;
 
       await organizationMemberDeleteCall(accessToken, organizationId, values.user_id);
-      message.success("Organization member deleted successfully");
+      toast.success("Organization member deleted successfully");
       setIsEditMemberModalVisible(false);
-      form.resetFields();
-      fetchOrgInfo();
+      queryClient.invalidateQueries({ queryKey: organizationKeys.all });
     } catch (error) {
-      message.error("Failed to delete organization member");
+      toast.fromError("Failed to delete organization member");
       console.error("Error deleting organization member:", error);
-    }
-  };
-
-  const handleOrgUpdate = async (values: any) => {
-    try {
-      if (!accessToken) return;
-
-      const updateData = {
-        organization_id: organizationId,
-        organization_alias: values.organization_alias,
-        models: values.models,
-        litellm_budget_table: {
-          tpm_limit: values.tpm_limit,
-          rpm_limit: values.rpm_limit,
-          max_budget: values.max_budget,
-          budget_duration: values.budget_duration,
-        },
-        metadata: values.metadata ? JSON.parse(values.metadata) : null,
-      };
-      
-      const response = await organizationUpdateCall(accessToken, updateData);
-
-      message.success("Organization settings updated successfully");
-      setIsEditing(false);
-      fetchOrgInfo();
-    } catch (error) {
-      message.error("Failed to update organization settings");
-      console.error("Error updating organization:", error);
     }
   };
 
@@ -171,277 +121,223 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
     return <div className="p-4">Organization not found</div>;
   }
 
+  const orgExtraColumns: MemberTableColumn[] = [
+    {
+      title: "Spend (USD)",
+      key: "spend",
+      render: (_: unknown, record: Member) => {
+        const orgMember =
+          record.user_id != null ? (orgData.members || []).find((m) => m.user_id === record.user_id) : undefined;
+        return <MoneyCell value={orgMember?.spend} decimals={4} />;
+      },
+    },
+    {
+      title: "Created At",
+      key: "created_at",
+      render: (_: unknown, record: Member) => {
+        const orgMember =
+          record.user_id != null ? (orgData.members || []).find((m) => m.user_id === record.user_id) : undefined;
+        return <span>{orgMember?.created_at ? new Date(orgMember.created_at).toLocaleString() : "-"}</span>;
+      },
+    },
+  ];
+
   return (
-    <div className="w-full h-screen p-4 bg-white">
-      <div className="flex justify-between items-center mb-6">
+    <div className="h-screen w-full bg-background p-4">
+      <div className="mb-6 flex items-center justify-between">
         <div>
-          <Button onClick={onClose} className="mb-4">← Back</Button>
-          <Title>{orgData.organization_alias}</Title>
-          <Text className="text-gray-500 font-mono">{orgData.organization_id}</Text>
+          <Button variant="ghost" onClick={onClose} className="mb-4">
+            <ArrowLeft className="size-4" />
+            Back to Organizations
+          </Button>
+          <h1 className="text-xl font-semibold tracking-tight text-foreground">{orgData.organization_alias}</h1>
+          <div className="flex items-center gap-1">
+            <span className="font-mono text-sm text-muted-foreground">{orgData.organization_id}</span>
+            <CopyButton value={orgData.organization_id} label="Copy organization ID" iconClassName="size-3" />
+          </div>
         </div>
       </div>
 
-      <TabGroup defaultIndex={editOrg ? 2 : 0}>
-        <TabList className="mb-4">
-          <Tab>Overview</Tab>
-          <Tab>Members</Tab>
-          <Tab>Settings</Tab>
-        </TabList>
+      <Tabs defaultValue={editOrg ? "settings" : "overview"} onValueChange={onTabChange} className="mb-4">
+        <TabsList variant="line" className="h-auto w-full justify-start rounded-none border-b p-0">
+          <TabsTrigger value="overview" className="flex-none rounded-none px-4 py-2">
+            Overview
+          </TabsTrigger>
+          <TabsTrigger value="members" className="flex-none rounded-none px-4 py-2">
+            Members
+          </TabsTrigger>
+          <TabsTrigger value="settings" className="flex-none rounded-none px-4 py-2">
+            Settings
+          </TabsTrigger>
+        </TabsList>
 
-        <TabPanels>
-          {/* Overview Panel */}
-          <TabPanel>
-          <Grid numItems={1} numItemsSm={2} numItemsLg={3} className="gap-6">
+        <TabsContent keepMounted={hasVisited("overview")} value="overview" className="pt-4">
+          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
             <Card>
-                <Text>Organization Details</Text>
-                <div className="mt-2">
-                <Text>Created: {new Date(orgData.created_at).toLocaleDateString()}</Text>
-                <Text>Updated: {new Date(orgData.updated_at).toLocaleDateString()}</Text>
-                <Text>Created By: {orgData.created_by}</Text>
+              <CardContent>
+                <p className="text-sm text-muted-foreground">Organization Details</p>
+                <div className="mt-2 text-sm text-foreground">
+                  <p>Created: {new Date(orgData.created_at).toLocaleDateString()}</p>
+                  <p>Updated: {new Date(orgData.updated_at).toLocaleDateString()}</p>
+                  <p>Created By: {orgData.created_by}</p>
                 </div>
+              </CardContent>
             </Card>
 
             <Card>
-                <Text>Budget Status</Text>
-                <div className="mt-2">
-                <Title>${orgData.spend.toFixed(6)}</Title>
-                <Text>of {orgData.litellm_budget_table.max_budget === null ? "Unlimited" : `$${orgData.litellm_budget_table.max_budget}`}</Text>
-                {orgData.litellm_budget_table.budget_duration && (
-                    <Text className="text-gray-500">Reset: {orgData.litellm_budget_table.budget_duration}</Text>
-                )}
+              <CardContent>
+                <p className="text-sm text-muted-foreground">Budget Status</p>
+                <div className="mt-2 text-sm text-foreground">
+                  <p className="text-xl font-semibold">${formatNumberWithCommas(orgData.spend, 4)}</p>
+                  <p>
+                    of{" "}
+                    {orgData.litellm_budget_table.max_budget === null
+                      ? "Unlimited"
+                      : `$${formatNumberWithCommas(orgData.litellm_budget_table.max_budget, 4)}`}
+                  </p>
+                  {orgData.litellm_budget_table.budget_duration && (
+                    <p className="text-muted-foreground">Reset: {orgData.litellm_budget_table.budget_duration}</p>
+                  )}
                 </div>
+              </CardContent>
             </Card>
 
             <Card>
-                <Text>Rate Limits</Text>
-                <div className="mt-2">
-                <Text>TPM: {orgData.litellm_budget_table.tpm_limit || 'Unlimited'}</Text>
-                <Text>RPM: {orgData.litellm_budget_table.rpm_limit || 'Unlimited'}</Text>
-                {orgData.litellm_budget_table.max_parallel_requests && (
-                    <Text>Max Parallel Requests: {orgData.litellm_budget_table.max_parallel_requests}</Text>
-                )}
+              <CardContent>
+                <p className="text-sm text-muted-foreground">Rate Limits</p>
+                <div className="mt-2 text-sm text-foreground">
+                  <p>TPM: {orgData.litellm_budget_table.tpm_limit || "Unlimited"}</p>
+                  <p>RPM: {orgData.litellm_budget_table.rpm_limit || "Unlimited"}</p>
+                  {orgData.litellm_budget_table.max_parallel_requests && (
+                    <p>Max Parallel Requests: {orgData.litellm_budget_table.max_parallel_requests}</p>
+                  )}
                 </div>
+              </CardContent>
             </Card>
 
             <Card>
-                <Text>Models</Text>
+              <CardContent>
+                <p className="text-sm text-muted-foreground">Models</p>
                 <div className="mt-2 flex flex-wrap gap-2">
-                {orgData.models.map((model, index) => (
-                    <Badge key={index} color="red">
-                    {model}
-                    </Badge>
-                ))}
+                  {orgData.models.length === 0 ? (
+                    <BadgeLink>All proxy models</BadgeLink>
+                  ) : (
+                    orgData.models.map((model, index) => <BadgeLink key={index}>{model}</BadgeLink>)
+                  )}
                 </div>
+              </CardContent>
             </Card>
+
             <Card>
-                <Text>Teams</Text>
+              <CardContent>
+                <p className="text-sm text-muted-foreground">Teams</p>
                 <div className="mt-2 flex flex-wrap gap-2">
-                {orgData.teams?.map((team, index) => (
-                    <Badge key={index} color="red">
-                    {team.team_id}
-                    </Badge>
-                ))}
+                  {orgData.teams?.map((team, index) => (
+                    <BadgeLink key={index} href={teamDetailHref(team.team_id)}>
+                      {teamAliasMap[team.team_id] || team.team_id}
+                    </BadgeLink>
+                  ))}
                 </div>
+              </CardContent>
             </Card>
-            </Grid>
-          </TabPanel>
 
-          {/* Budget Panel */}
-          <TabPanel>
-            <div className="space-y-4">
-                <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[75vh]">
-                <Table>
-                    <TableHead>
-                    <TableRow>
-                        <TableHeaderCell>User ID</TableHeaderCell>
-                        <TableHeaderCell>Role</TableHeaderCell>
-                        <TableHeaderCell>Spend</TableHeaderCell>
-                        <TableHeaderCell>Created At</TableHeaderCell>
-                        <TableHeaderCell></TableHeaderCell>
-                    </TableRow>
-                    </TableHead>
+            <ObjectPermissionsView
+              objectPermission={orgData.object_permission}
+              variant="card"
+              accessToken={accessToken}
+            />
+          </div>
+        </TabsContent>
 
-                    <TableBody>
-                    {orgData.members?.map((member, index) => (
-                        <TableRow key={index}>
-                        <TableCell>
-                            <Text className="font-mono">{member.user_id}</Text>
-                        </TableCell>
-                        <TableCell>
-                            <Text className="font-mono">{member.user_role}</Text>
-                        </TableCell>
-                        <TableCell>
-                            <Text>${member.spend.toFixed(6)}</Text>
-                        </TableCell>
-                        <TableCell>
-                            <Text>{new Date(member.created_at).toLocaleString()}</Text>
-                        </TableCell>
-                        <TableCell>
-                            {canEditOrg && (
-                            <>
-                                <Icon
-                                icon={PencilAltIcon}
-                                size="sm"
-                                onClick={() => {
-                                    setSelectedEditMember({
-                                      "role": member.user_role,
-                                      "user_email": member.user_email,
-                                      "user_id": member.user_id
-                                    });
-                                    setIsEditMemberModalVisible(true);
-                                }}
-                                />
-                                <Icon
-                                icon={TrashIcon}
-                                size="sm"
-                                onClick={() => {
-                                    handleMemberDelete(member);
-                                }}
-                                />
-                            </>
-                            )}
-                        </TableCell>
-                        </TableRow>
-                    ))}
-                    </TableBody>
-                </Table>
-                </Card>
-                {canEditOrg && (
-                <TremorButton onClick={() => {
-                    setIsAddMemberModalVisible(true);
-                }}>
-                    Add Member
-                </TremorButton>
-                )}
-            </div>
-          </TabPanel>
+        <TabsContent keepMounted={hasVisited("members")} value="members" className="pt-4">
+          <div className="space-y-4">
+            <MemberTable
+              members={(orgData.members || []).map((m) => ({
+                role: m.user_role || "",
+                user_id: m.user_id,
+                user_email: m.user_email,
+              }))}
+              canEdit={canEditOrg}
+              onEdit={(member) => {
+                setSelectedEditMember(member);
+                setIsEditMemberModalVisible(true);
+              }}
+              onDelete={(member) => handleMemberDelete(member)}
+              onAddMember={() => setIsAddMemberModalVisible(true)}
+              roleColumnTitle="Organization Role"
+              extraColumns={orgExtraColumns}
+              emptyText="No members found"
+            />
+          </div>
+        </TabsContent>
 
-          {/* Settings Panel */}
-          <TabPanel>
-            <Card>
-              <div className="flex justify-between items-center mb-4">
-                <Title>Organization Settings</Title>
-                {(canEditOrg && !isEditing) && (
-                  <TremorButton 
-                    onClick={() => setIsEditing(true)}
-                  >
-                    Edit Settings
-                  </TremorButton>
-                )}
+        <TabsContent keepMounted={hasVisited("settings")} value="settings" className="pt-4">
+          <Card className="max-h-[65vh] overflow-y-auto">
+            <CardContent>
+              <div className="mb-4 flex items-center justify-between">
+                <h2 className="text-lg font-semibold text-foreground">Organization Settings</h2>
+                {canEditOrg && !isEditing && <Button onClick={() => setIsEditing(true)}>Edit Settings</Button>}
               </div>
 
               {isEditing ? (
-                <Form
-                  form={form}
-                  onFinish={handleOrgUpdate}
-                  initialValues={{
-                    organization_alias: orgData.organization_alias,
-                    models: orgData.models,
-                    tpm_limit: orgData.litellm_budget_table.tpm_limit,
-                    rpm_limit: orgData.litellm_budget_table.rpm_limit,
-                    max_budget: orgData.litellm_budget_table.max_budget,
-                    budget_duration: orgData.litellm_budget_table.budget_duration,
-                    metadata: orgData.metadata ? JSON.stringify(orgData.metadata, null, 2) : "",
-                  }}
-                  layout="vertical"
-                >
-                  <Form.Item
-                    label="Organization Name"
-                    name="organization_alias"
-                    rules={[{ required: true, message: "Please input an organization name" }]}
-                  >
-                    <TextInput />
-                  </Form.Item>
-                  
-                  <Form.Item label="Models" name="models">
-                    <Select
-                      mode="multiple"
-                      placeholder="Select models"
-                    >
-                      <Select.Option key="all-proxy-models" value="all-proxy-models">
-                        All Proxy Models
-                      </Select.Option>
-                      {userModels.map((model) => (
-                        <Select.Option key={model} value={model}>
-                          {getModelDisplayName(model)}
-                        </Select.Option>
-                      ))}
-                    </Select>
-                  </Form.Item>
-
-                  <Form.Item label="Max Budget (USD)" name="max_budget">
-                    <NumericalInput step={0.01} precision={2} style={{ width: "100%" }} />
-                  </Form.Item>
-
-                  <Form.Item label="Reset Budget" name="budget_duration">
-                    <Select placeholder="n/a">
-                      <Select.Option value="24h">daily</Select.Option>
-                      <Select.Option value="7d">weekly</Select.Option>
-                      <Select.Option value="30d">monthly</Select.Option>
-                    </Select>
-                  </Form.Item>
-
-                  <Form.Item label="Tokens per minute Limit (TPM)" name="tpm_limit">
-                    <NumericalInput step={1} style={{ width: "100%" }} />
-                  </Form.Item>
-
-                  <Form.Item label="Requests per minute Limit (RPM)" name="rpm_limit">
-                    <NumericalInput step={1} style={{ width: "100%" }} />
-                  </Form.Item>
-
-                  <Form.Item label="Metadata" name="metadata">  
-                    <Input.TextArea rows={4} />
-                  </Form.Item>
-
-                  <div className="flex justify-end gap-2 mt-6">
-                    <Button onClick={() => setIsEditing(false)}>
-                      Cancel
-                    </Button>
-                    <TremorButton type="submit">
-                      Save Changes
-                    </TremorButton>
-                  </div>
-                </Form>
+                <OrgSettingsForm
+                  organizationId={organizationId}
+                  org={orgData}
+                  accessToken={accessToken || ""}
+                  onCancel={() => setIsEditing(false)}
+                  onSaved={() => setIsEditing(false)}
+                />
               ) : (
-                <div className="space-y-4">
+                <div className="space-y-4 text-sm">
                   <div>
-                    <Text className="font-medium">Organization Name</Text>
+                    <p className="font-medium text-foreground">Organization Name</p>
                     <div>{orgData.organization_alias}</div>
                   </div>
                   <div>
-                    <Text className="font-medium">Organization ID</Text>
+                    <p className="font-medium text-foreground">Organization ID</p>
                     <div className="font-mono">{orgData.organization_id}</div>
                   </div>
                   <div>
-                    <Text className="font-medium">Created At</Text>
+                    <p className="font-medium text-foreground">Created At</p>
                     <div>{new Date(orgData.created_at).toLocaleString()}</div>
                   </div>
                   <div>
-                    <Text className="font-medium">Models</Text>
-                    <div className="flex flex-wrap gap-2 mt-1">
+                    <p className="font-medium text-foreground">Models</p>
+                    <div className="mt-1 flex flex-wrap gap-2">
                       {orgData.models.map((model, index) => (
-                        <Badge key={index} color="red">
-                          {model}
-                        </Badge>
+                        <BadgeLink key={index}>{model}</BadgeLink>
                       ))}
                     </div>
                   </div>
                   <div>
-                    <Text className="font-medium">Rate Limits</Text>
-                    <div>TPM: {orgData.litellm_budget_table.tpm_limit || 'Unlimited'}</div>
-                    <div>RPM: {orgData.litellm_budget_table.rpm_limit || 'Unlimited'}</div>
+                    <p className="font-medium text-foreground">Rate Limits</p>
+                    <div>TPM: {orgData.litellm_budget_table.tpm_limit || "Unlimited"}</div>
+                    <div>RPM: {orgData.litellm_budget_table.rpm_limit || "Unlimited"}</div>
                   </div>
                   <div>
-                    <Text className="font-medium">Budget</Text>
-                    <div>Max: {orgData.litellm_budget_table.max_budget !== null ? `$${orgData.litellm_budget_table.max_budget}` : 'No Limit'}</div>
-                    <div>Reset: {orgData.litellm_budget_table.budget_duration || 'Never'}</div>
+                    <p className="font-medium text-foreground">Budget</p>
+                    <div>
+                      Max:{" "}
+                      {orgData.litellm_budget_table.max_budget !== null
+                        ? `$${formatNumberWithCommas(orgData.litellm_budget_table.max_budget, 4)}`
+                        : "No Limit"}
+                    </div>
+                    <div>Reset: {orgData.litellm_budget_table.budget_duration || "Never"}</div>
                   </div>
+
+                  <ObjectPermissionsView
+                    objectPermission={orgData.object_permission}
+                    variant="inline"
+                    className="border-t pt-4"
+                    accessToken={accessToken}
+                  />
                 </div>
               )}
-            </Card>
-          </TabPanel>
-        </TabPanels>
-      </TabGroup>
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
+
       <UserSearchModal
         isVisible={isAddMemberModalVisible}
         onCancel={() => setIsAddMemberModalVisible(false)}
@@ -449,9 +345,21 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
         accessToken={accessToken}
         title="Add Organization Member"
         roles={[
-          { label: "org_admin", value: "org_admin", description: "Can add and remove members, and change their roles." },
-          { label: "internal_user", value: "internal_user", description: "Can view/create keys for themselves within organization." },
-          { label: "internal_user_viewer", value: "internal_user_viewer", description: "Can only view their keys within organization." }
+          {
+            label: "org_admin",
+            value: "org_admin",
+            description: "Can add and remove members, and change their roles.",
+          },
+          {
+            label: "internal_user",
+            value: "internal_user",
+            description: "Can view/create keys for themselves within organization.",
+          },
+          {
+            label: "internal_user_viewer",
+            value: "internal_user_viewer",
+            description: "Can only view their keys within organization.",
+          },
         ]}
         defaultRole="internal_user"
       />
@@ -468,8 +376,8 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
           roleOptions: [
             { label: "Org Admin", value: "org_admin" },
             { label: "Internal User", value: "internal_user" },
-            { label: "Internal User Viewer", value: "internal_user_viewer" }
-          ]
+            { label: "Internal User Viewer", value: "internal_user_viewer" },
+          ],
         }}
       />
     </div>

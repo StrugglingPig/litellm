@@ -1,7 +1,7 @@
-import React, { useEffect, useState } from 'react';
-import { Select } from 'antd';
-import { Tag } from './types';
-import { tagListCall } from '../networking';
+import React, { useEffect, useState } from "react";
+import { Tag } from "./types";
+import { tagListCall } from "../networking";
+import { MultiSelect } from "@/components/shared/MultiSelect";
 
 interface TagSelectorProps {
   onChange: (selectedTags: string[]) => void;
@@ -17,36 +17,35 @@ const TagSelector: React.FC<TagSelectorProps> = ({ onChange, value, className, a
   useEffect(() => {
     const fetchTags = async () => {
       if (!accessToken) return;
+      setLoading(true);
       try {
         const response = await tagListCall(accessToken);
-        console.log("List tags response:", response);
         setTags(Object.values(response));
       } catch (error) {
         console.error("Error fetching tags:", error);
+      } finally {
+        setLoading(false);
       }
     };
 
     fetchTags();
-  }, []);
+  }, [accessToken]);
 
   return (
-    <Select
-      mode="multiple"
-      placeholder="Select tags"
-      onChange={onChange}
+    <MultiSelect
+      placeholder="Select or create tags"
+      onValueChange={onChange}
       value={value}
       loading={loading}
       className={className}
-      options={tags.map(tag => ({
+      allowCustomValues
+      options={tags.map((tag) => ({
         label: tag.name,
         value: tag.name,
-        title: tag.description || tag.name,
+        description: tag.description || undefined,
       }))}
-      optionFilterProp="label"
-      showSearch
-      style={{ width: '100%' }}
     />
   );
 };
 
-export default TagSelector; 
+export default TagSelector;

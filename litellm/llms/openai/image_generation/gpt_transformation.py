@@ -1,19 +1,24 @@
-from typing import List
+from typing import TYPE_CHECKING, Any, Final
+
+import httpx
 
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
 from litellm.types.llms.openai import OpenAIImageGenerationOptionalParams
+from litellm.types.utils import ImageResponse
+from litellm.utils import convert_to_model_response_object
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.logging import Logging as LiteLLMLoggingObj
 
 
 class GPTImageGenerationConfig(BaseImageGenerationConfig):
     """
-    OpenAI gpt-image-1 image generation config
+    OpenAI gpt-image image generation config
     """
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
         return [
             "background",
             "moderation",
@@ -32,9 +37,9 @@ class GPTImageGenerationConfig(BaseImageGenerationConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        supported_params = self.get_supported_openai_params(model)
-        for k in non_default_params.keys():
-            if k not in optional_params.keys():
+        supported_params: Final = self.get_supported_openai_params(model)
+        for k in non_default_params:
+            if k not in optional_params:
                 if k in supported_params:
                     optional_params[k] = non_default_params[k]
                 elif drop_params:
@@ -45,3 +50,39 @@ class GPTImageGenerationConfig(BaseImageGenerationConfig):
                     )
 
         return optional_params
+
+    def transform_image_generation_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ImageResponse,
+        logging_obj: "LiteLLMLoggingObj",
+        request_data: dict,
+        optional_params: dict,
+        litellm_params: dict,
+        encoding: Any,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
+    ) -> ImageResponse:
+        response: Final = raw_response.json()
+
+        stringified_response: Final = response
+        ## LOGGING
+        logging_obj.post_call(
+            input=request_data.get("prompt", ""),
+            api_key=api_key,
+            additional_args={"complete_input_dict": request_data},
+            original_response=stringified_response,
+        )
+        image_response: Final[ImageResponse] = convert_to_model_response_object(
+            response_object=stringified_response,
+            model_response_object=model_response,
+            response_type="image_generation",
+        )
+
+        # set optional params
+        image_response.size = optional_params.get("size", "1024x1024")  # default is always 1024x1024
+        image_response.quality = optional_params.get("quality", "high")  # always hd for dall-e-3
+        image_response.output_format = optional_params.get("response_format", "png")  # always png for dall-e-3
+
+        return image_response

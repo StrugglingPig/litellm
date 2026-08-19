@@ -1,12 +1,15 @@
-import os
 from typing import Dict, Literal, Type, Union
+
+from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
+from litellm_enterprise.proxy.hooks.managed_vector_stores import (
+    _PROXY_LiteLLMManagedVectorStores,
+)
 
 from litellm.integrations.custom_logger import CustomLogger
 
-from .managed_files import _PROXY_LiteLLMManagedFiles
-
 ENTERPRISE_PROXY_HOOKS: Dict[str, Type[CustomLogger]] = {
     "managed_files": _PROXY_LiteLLMManagedFiles,
+    "managed_vector_stores": _PROXY_LiteLLMManagedVectorStores,
 }
 
 
@@ -14,10 +17,11 @@ def get_enterprise_proxy_hook(
     hook_name: Union[
         Literal[
             "managed_files",
+            "managed_vector_stores",
             "max_parallel_requests",
         ],
         str,
-    ]
+    ],
 ):
     """
     Factory method to get a enterprise hook instance by name

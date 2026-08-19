@@ -1,7 +1,7 @@
 import React from "react";
-import { Modal, message, Typography } from "antd";
+import { Button, Modal, Typography } from "antd";
 import { CopyToClipboard } from "react-copy-to-clipboard";
-import { Text, Button } from "@tremor/react";
+import { toast } from "@/lib/toast";
 
 export interface InvitationLink {
   id: string;
@@ -18,11 +18,36 @@ export interface InvitationLink {
 
 interface OnboardingProps {
   isInvitationLinkModalVisible: boolean;
-  setIsInvitationLinkModalVisible: React.Dispatch<
-    React.SetStateAction<boolean>
-  >;
+  setIsInvitationLinkModalVisible: React.Dispatch<React.SetStateAction<boolean>>;
   baseUrl: string;
   invitationLinkData: InvitationLink | null;
+  modalType?: "invitation" | "resetPassword";
+}
+
+export function buildOnboardingUrl({
+  baseUrl,
+  invitationId,
+  hasUserSetupSso,
+  resetPassword,
+}: {
+  baseUrl: string;
+  invitationId: string | undefined;
+  hasUserSetupSso: boolean;
+  resetPassword: boolean;
+}): string {
+  if (!baseUrl) {
+    return "";
+  }
+  const basePath = new URL(baseUrl).pathname;
+  const uiPath = basePath && basePath !== "/" ? `${basePath}/ui` : "ui";
+  if (hasUserSetupSso) {
+    return new URL(uiPath, baseUrl).toString();
+  }
+  if (!invitationId) {
+    return "";
+  }
+  const action = resetPassword ? "&action=reset_password" : "";
+  return new URL(`${uiPath}/onboarding?invitation_id=${invitationId}${action}`, baseUrl).toString();
 }
 
 export default function OnboardingModal({
@@ -30,8 +55,9 @@ export default function OnboardingModal({
   setIsInvitationLinkModalVisible,
   baseUrl,
   invitationLinkData,
+  modalType = "invitation",
 }: OnboardingProps) {
-  const { Title, Paragraph } = Typography;
+  const { Paragraph } = Typography;
   const handleInvitationOk = () => {
     setIsInvitationLinkModalVisible(false);
   };
@@ -40,41 +66,41 @@ export default function OnboardingModal({
     setIsInvitationLinkModalVisible(false);
   };
 
-  const getInvitationUrl = () => {
-    if (invitationLinkData?.has_user_setup_sso) {
-      return new URL("/ui", baseUrl).toString();
-    }
-    return new URL(`/ui?invitation_id=${invitationLinkData?.id}`, baseUrl).toString();
-  };
+  const getInvitationUrl = () =>
+    buildOnboardingUrl({
+      baseUrl,
+      invitationId: invitationLinkData?.id,
+      hasUserSetupSso: invitationLinkData?.has_user_setup_sso ?? false,
+      resetPassword: modalType === "resetPassword",
+    });
 
   return (
     <Modal
-      title="Invitation Link"
-      visible={isInvitationLinkModalVisible}
+      title={modalType === "invitation" ? "Invitation Link" : "Reset Password Link"}
+      open={isInvitationLinkModalVisible}
       width={800}
       footer={null}
       onOk={handleInvitationOk}
       onCancel={handleInvitationCancel}
     >
       <Paragraph>
-        Copy and send the generated link to onboard this user to the proxy.
+        {modalType === "invitation"
+          ? "Copy and send the generated link to onboard this user to the proxy."
+          : "Copy and send the generated link to the user to reset their password."}
       </Paragraph>
       <div className="flex justify-between pt-5 pb-2">
-        <Text className="text-base">User ID</Text>
-        <Text>{invitationLinkData?.user_id}</Text>
+        <p className="text-base">User ID</p>
+        <p className="text-sm">{invitationLinkData?.user_id}</p>
       </div>
       <div className="flex justify-between pt-5 pb-2">
-        <Text>Invitation Link</Text>
-        <Text>
-          <Text>{getInvitationUrl()}</Text>
-        </Text>
+        <p className="text-sm">{modalType === "invitation" ? "Invitation Link" : "Reset Password Link"}</p>
+        <p className="text-sm">{getInvitationUrl()}</p>
       </div>
       <div className="flex justify-end mt-5">
-        <CopyToClipboard
-          text={getInvitationUrl()}
-          onCopy={() => message.success("Copied!")}
-        >
-          <Button variant="primary">Copy invitation link</Button>
+        <CopyToClipboard text={getInvitationUrl()} onCopy={() => toast.success("Copied!")}>
+          <Button type="primary">
+            {modalType === "invitation" ? "Copy invitation link" : "Copy password reset link"}
+          </Button>
         </CopyToClipboard>
       </div>
     </Modal>

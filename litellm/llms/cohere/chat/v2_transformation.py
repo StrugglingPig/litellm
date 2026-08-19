@@ -1,17 +1,22 @@
 import time
-from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, List, Optional, Union
+from collections.abc import AsyncIterator, Iterator
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
 import litellm
-from litellm.litellm_core_utils.prompt_templates.factory import cohere_messages_pt_v2
-from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.types.llms.cohere import CohereV2ChatResponse
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionAnnotation,
+    ChatCompletionAnnotationURLCitation,
+    ChatCompletionToolCallChunk,
+)
 from litellm.types.utils import ModelResponse, Usage
 
-from ..common_utils import CohereError
-from ..common_utils import ModelResponseIterator as CohereModelResponseIterator
+from ..common_utils import CohereError, CohereV2ModelResponseIterator
 from ..common_utils import validate_environment as cohere_validate_environment
 
 if TYPE_CHECKING:
@@ -22,7 +27,7 @@ else:
     LiteLLMLoggingObj = Any
 
 
-class CohereV2ChatConfig(BaseConfig):
+class CohereV2ChatConfig(OpenAIGPTConfig):
     """
     Configuration class for Cohere's API interface.
 
@@ -47,47 +52,47 @@ class CohereV2ChatConfig(BaseConfig):
         seed (int, optional): A seed to assist reproducibility of the model's response.
     """
 
-    preamble: Optional[str] = None
-    chat_history: Optional[list] = None
-    generation_id: Optional[str] = None
-    response_id: Optional[str] = None
-    conversation_id: Optional[str] = None
-    prompt_truncation: Optional[str] = None
-    connectors: Optional[list] = None
-    search_queries_only: Optional[bool] = None
-    documents: Optional[list] = None
-    temperature: Optional[int] = None
-    max_tokens: Optional[int] = None
-    k: Optional[int] = None
-    p: Optional[int] = None
-    frequency_penalty: Optional[int] = None
-    presence_penalty: Optional[int] = None
-    tools: Optional[list] = None
-    tool_results: Optional[list] = None
-    seed: Optional[int] = None
+    preamble: str | None = None
+    chat_history: list | None = None
+    generation_id: str | None = None
+    response_id: str | None = None
+    conversation_id: str | None = None
+    prompt_truncation: str | None = None
+    connectors: list | None = None
+    search_queries_only: bool | None = None
+    documents: list | None = None
+    temperature: int | None = None
+    max_tokens: int | None = None
+    k: int | None = None
+    p: int | None = None
+    frequency_penalty: int | None = None
+    presence_penalty: int | None = None
+    tools: list | None = None
+    tool_results: list | None = None
+    seed: int | None = None
 
     def __init__(
         self,
-        preamble: Optional[str] = None,
-        chat_history: Optional[list] = None,
-        generation_id: Optional[str] = None,
-        response_id: Optional[str] = None,
-        conversation_id: Optional[str] = None,
-        prompt_truncation: Optional[str] = None,
-        connectors: Optional[list] = None,
-        search_queries_only: Optional[bool] = None,
-        documents: Optional[list] = None,
-        temperature: Optional[int] = None,
-        max_tokens: Optional[int] = None,
-        k: Optional[int] = None,
-        p: Optional[int] = None,
-        frequency_penalty: Optional[int] = None,
-        presence_penalty: Optional[int] = None,
-        tools: Optional[list] = None,
-        tool_results: Optional[list] = None,
-        seed: Optional[int] = None,
+        preamble: str | None = None,
+        chat_history: list | None = None,
+        generation_id: str | None = None,
+        response_id: str | None = None,
+        conversation_id: str | None = None,
+        prompt_truncation: str | None = None,
+        connectors: list | None = None,
+        search_queries_only: bool | None = None,
+        documents: list | None = None,
+        temperature: int | None = None,
+        max_tokens: int | None = None,
+        k: int | None = None,
+        p: int | None = None,
+        frequency_penalty: int | None = None,
+        presence_penalty: int | None = None,
+        tools: list | None = None,
+        tool_results: list | None = None,
+        seed: int | None = None,
     ) -> None:
-        locals_ = locals()
+        locals_: Final = locals()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -96,11 +101,11 @@ class CohereV2ChatConfig(BaseConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         return cohere_validate_environment(
             headers=headers,
@@ -110,11 +115,12 @@ class CohereV2ChatConfig(BaseConfig):
             api_key=api_key,
         )
 
-    def get_supported_openai_params(self, model: str) -> List[str]:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return [
             "stream",
             "temperature",
             "max_tokens",
+            "max_completion_tokens",
             "top_p",
             "frequency_penalty",
             "presence_penalty",
@@ -138,7 +144,9 @@ class CohereV2ChatConfig(BaseConfig):
                 optional_params["stream"] = value
             if param == "temperature":
                 optional_params["temperature"] = value
-            if param == "max_tokens":
+            if param == "max_tokens" and "max_completion_tokens" not in non_default_params:
+                optional_params["max_tokens"] = value
+            if param == "max_completion_tokens":
                 optional_params["max_tokens"] = value
             if param == "n":
                 optional_params["num_generations"] = value
@@ -159,37 +167,17 @@ class CohereV2ChatConfig(BaseConfig):
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        ## Load Config
-        for k, v in litellm.CohereChatConfig.get_config().items():
-            if (
-                k not in optional_params
-            ):  # completion(top_k=3) > cohere_config(top_k=3) <- allows for dynamic variables to be passed in
-                optional_params[k] = v
+        """
+        Cohere v2 chat api is in openai format, so we can use the openai transform request function to transform the request.
+        """
+        data: Final = super().transform_request(model, messages, optional_params, litellm_params, headers)
 
-        most_recent_message, chat_history = cohere_messages_pt_v2(
-            messages=messages, model=model, llm_provider="cohere_chat"
-        )
-
-        ## Handle Tool Calling
-        if "tools" in optional_params:
-            _is_function_call = True
-            cohere_tools = self._construct_cohere_tool(tools=optional_params["tools"])
-            optional_params["tools"] = cohere_tools
-        if isinstance(most_recent_message, dict):
-            optional_params["tool_results"] = [most_recent_message]
-        elif isinstance(most_recent_message, str):
-            optional_params["message"] = most_recent_message
-
-        ## check if chat history message is 'user' and 'tool_results' is given -> force_single_step=True, else cohere api fails
-        if len(chat_history) > 0 and chat_history[-1]["role"] == "USER":
-            optional_params["force_single_step"] = True
-
-        return optional_params
+        return data
 
     def transform_response(
         self,
@@ -198,64 +186,69 @@ class CohereV2ChatConfig(BaseConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         try:
-            raw_response_json = raw_response.json()
+            raw_response_json: Final = raw_response.json()
         except Exception:
-            raise CohereError(
-                message=raw_response.text, status_code=raw_response.status_code
-            )
+            raise CohereError(message=raw_response.text, status_code=raw_response.status_code)
 
         try:
-            cohere_v2_chat_response = CohereV2ChatResponse(**raw_response_json)  # type: ignore
+            cohere_v2_chat_response: Final = CohereV2ChatResponse(**raw_response_json)
         except Exception:
             raise CohereError(message=raw_response.text, status_code=422)
 
-        cohere_content = cohere_v2_chat_response["message"].get("content", None)
+        cohere_content: Final = cohere_v2_chat_response["message"].get("content", None)
         if cohere_content is not None:
-            model_response.choices[0].message.content = "".join(  # type: ignore
-                [
-                    content.get("text", "")
-                    for content in cohere_content
-                    if content is not None
-                ]
+            model_response.choices[0].message.content = "".join(
+                [content.get("text", "") for content in cohere_content if content is not None]
             )
 
-        ## ADD CITATIONS
-        if "citations" in cohere_v2_chat_response:
-            setattr(model_response, "citations", cohere_v2_chat_response["citations"])
+        ## ADD CITATIONS AS ANNOTATIONS
+        annotations: list[ChatCompletionAnnotation] | None = None
+        citations = None
+
+        if "message" in cohere_v2_chat_response and "citations" in cohere_v2_chat_response["message"]:
+            citations = cohere_v2_chat_response["message"]["citations"]
+
+        if citations:
+            annotations = self._translate_citations_to_openai_annotations(citations)
 
         ## Tool calling response
-        cohere_tools_response = cohere_v2_chat_response["message"].get("tool_calls", [])
+        cohere_tools_response: Final = cohere_v2_chat_response["message"].get("tool_calls", [])
         if cohere_tools_response is not None and cohere_tools_response != []:
             # convert cohere_tools_response to OpenAI response format
-            tool_calls: List[ChatCompletionToolCallChunk] = []
+            tool_calls: Final[list[ChatCompletionToolCallChunk]] = []
             for index, tool in enumerate(cohere_tools_response):
                 tool_call: ChatCompletionToolCallChunk = {
-                    **tool,  # type: ignore
+                    **tool,
                     "index": index,
                 }
                 tool_calls.append(tool_call)
-            _message = litellm.Message(
+            _message: Final = litellm.Message(
                 tool_calls=tool_calls,
                 content=None,
+                annotations=annotations,
             )
-            model_response.choices[0].message = _message  # type: ignore
+            model_response.choices[0].message = _message
+        else:
+            if annotations:
+                current_message: Final = model_response.choices[0].message
+                current_message.annotations = annotations
 
         ## CALCULATING USAGE - use cohere `billed_units` for returning usage
-        token_usage = cohere_v2_chat_response["usage"].get("tokens", {})
-        prompt_tokens = token_usage.get("input_tokens", 0)
-        completion_tokens = token_usage.get("output_tokens", 0)
+        token_usage: Final = cohere_v2_chat_response["usage"].get("tokens", {})
+        prompt_tokens: Final = token_usage.get("input_tokens", 0)
+        completion_tokens: Final = token_usage.get("output_tokens", 0)
 
         model_response.created = int(time.time())
         model_response.model = model
-        usage = Usage(
+        usage: Final = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,
@@ -263,94 +256,97 @@ class CohereV2ChatConfig(BaseConfig):
         setattr(model_response, "usage", usage)
         return model_response
 
-    def _construct_cohere_tool(
-        self,
-        tools: Optional[list] = None,
-    ):
-        if tools is None:
-            tools = []
-        cohere_tools = []
-        for tool in tools:
-            cohere_tool = self._translate_openai_tool_to_cohere(tool)
-            cohere_tools.append(cohere_tool)
-        return cohere_tools
-
-    def _translate_openai_tool_to_cohere(
-        self,
-        openai_tool: dict,
-    ):
-        # cohere tools look like this
-        """
-        {
-        "name": "query_daily_sales_report",
-        "description": "Connects to a database to retrieve overall sales volumes and sales information for a given day.",
-        "parameter_definitions": {
-            "day": {
-                "description": "Retrieves sales data for this day, formatted as YYYY-MM-DD.",
-                "type": "str",
-                "required": True
-            }
-        }
-        }
-        """
-
-        # OpenAI tools look like this
-        """
-        {
-            "type": "function",
-            "function": {
-                "name": "get_current_weather",
-                "description": "Get the current weather in a given location",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "location": {
-                            "type": "string",
-                            "description": "The city and state, e.g. San Francisco, CA",
-                        },
-                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
-                    },
-                    "required": ["location"],
-                },
-            },
-        }
-        """
-        cohere_tool = {
-            "name": openai_tool["function"]["name"],
-            "description": openai_tool["function"]["description"],
-            "parameter_definitions": {},
-        }
-
-        for param_name, param_def in openai_tool["function"]["parameters"][
-            "properties"
-        ].items():
-            required_params = (
-                openai_tool.get("function", {})
-                .get("parameters", {})
-                .get("required", [])
-            )
-            cohere_param_def = {
-                "description": param_def.get("description", ""),
-                "type": param_def.get("type", ""),
-                "required": param_name in required_params,
-            }
-            cohere_tool["parameter_definitions"][param_name] = cohere_param_def
-
-        return cohere_tool
-
     def get_model_response_iterator(
         self,
-        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
-        json_mode: Optional[bool] = False,
+        json_mode: bool | None = False,
     ):
-        return CohereModelResponseIterator(
+        return CohereV2ModelResponseIterator(
             streaming_response=streaming_response,
             sync_stream=sync_stream,
             json_mode=json_mode,
         )
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_complete_url(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+        model: str,
+        optional_params: dict,
+        litellm_params: dict,
+        stream: bool | None = None,
+    ) -> str:
+        """
+        Get the complete URL for Cohere v2 chat completion.
+        The api_base should already include the full path.
+        """
+        if api_base is None:
+            raise ValueError("api_base is required")
+        return api_base
+
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return CohereError(status_code=status_code, message=error_message)
+
+    def _translate_citations_to_openai_annotations(self, citations: list[dict]) -> list[ChatCompletionAnnotation]:
+        """
+        Transform Cohere citations to OpenAI annotations format.
+
+        Creates separate annotations for each source in a citation, allowing multiple
+        annotations with the same start/end index if they reference different sources.
+
+        Args:
+            citations: List of Cohere citation objects with format:
+                {
+                    "start": int,
+                    "end": int,
+                    "text": str,
+                    "sources": [
+                        {
+                            "type": "document",
+                            "document": {
+                                "title": str,
+                                "snippet": str,
+                                ...
+                            },
+                            "id": str
+                        }
+                    ]
+                }
+
+        Returns:
+            List of OpenAI ChatCompletionAnnotation objects (one per source)
+        """
+        annotations: Final[list[ChatCompletionAnnotation]] = []
+
+        for citation in citations:
+            start_index = citation.get("start", 0)
+            end_index = citation.get("end", 0)
+
+            # Extract source information - loop through all sources
+            sources = citation.get("sources", [])
+            if not sources:
+                continue
+
+            # Create an annotation for each source
+            for source in sources:
+                if source.get("type") == "document" and "document" in source:
+                    document = source["document"]
+                    title = document.get("title", "")
+                    url = source.get("url") or f"source:{source.get('id', 'unknown')}"
+
+                    url_citation: ChatCompletionAnnotationURLCitation = {
+                        "start_index": start_index,
+                        "end_index": end_index,
+                        "title": title,
+                        "url": url,
+                    }
+
+                    annotation: ChatCompletionAnnotation = {
+                        "type": "url_citation",
+                        "url_citation": url_citation,
+                    }
+
+                    annotations.append(annotation)
+
+        return annotations

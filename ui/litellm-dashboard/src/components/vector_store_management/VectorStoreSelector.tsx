@@ -1,20 +1,23 @@
-import React, { useEffect, useState } from 'react';
-import { Select, Typography, Tooltip } from 'antd';
-import { InfoCircleOutlined } from '@ant-design/icons';
-import { VectorStore } from './types';
-import { vectorStoreListCall } from '../networking';
+import React, { useEffect, useState } from "react";
+import { VectorStore } from "./types";
+import { vectorStoreListCall } from "../networking";
+import { MultiSelect } from "@/components/shared/MultiSelect";
 interface VectorStoreSelectorProps {
   onChange: (selectedVectorStores: string[]) => void;
   value?: string[];
   className?: string;
   accessToken: string;
+  placeholder?: string;
+  disabled?: boolean;
 }
 
-const VectorStoreSelector: React.FC<VectorStoreSelectorProps> = ({ 
-  onChange, 
-  value, 
-  className, 
-  accessToken 
+const VectorStoreSelector: React.FC<VectorStoreSelectorProps> = ({
+  onChange,
+  value,
+  className,
+  accessToken,
+  placeholder = "Select vector stores",
+  disabled = false,
 }) => {
   const [vectorStores, setVectorStores] = useState<VectorStore[]>([]);
   const [loading, setLoading] = useState(false);
@@ -22,7 +25,7 @@ const VectorStoreSelector: React.FC<VectorStoreSelectorProps> = ({
   useEffect(() => {
     const fetchVectorStores = async () => {
       if (!accessToken) return;
-      
+
       setLoading(true);
       try {
         const response = await vectorStoreListCall(accessToken);
@@ -40,25 +43,22 @@ const VectorStoreSelector: React.FC<VectorStoreSelectorProps> = ({
   }, [accessToken]);
 
   return (
-    <div>
-      <Select
-        mode="multiple"
-        placeholder="Select vector stores"
-        onChange={onChange}
+    <div className="min-w-0">
+      <MultiSelect
+        placeholder={placeholder}
+        onValueChange={onChange}
         value={value}
         loading={loading}
         className={className}
-        options={vectorStores.map(store => ({
+        disabled={disabled}
+        options={vectorStores.map((store) => ({
           label: `${store.vector_store_name || store.vector_store_id} (${store.vector_store_id})`,
           value: store.vector_store_id,
-          title: store.vector_store_description || store.vector_store_id,
+          description: store.vector_store_description || undefined,
         }))}
-        optionFilterProp="label"
-        showSearch
-        style={{ width: '100%' }}
       />
     </div>
   );
 };
 
-export default VectorStoreSelector; 
+export default VectorStoreSelector;

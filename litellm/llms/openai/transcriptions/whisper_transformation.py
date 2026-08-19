@@ -1,8 +1,10 @@
-from typing import List, Optional, Union
+import json
+from typing import Final
 
-from httpx import Headers
+from httpx import Headers, Response
 
 from litellm.llms.base_llm.audio_transcription.transformation import (
+    AudioTranscriptionRequestData,
     BaseAudioTranscriptionConfig,
 )
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -11,15 +13,41 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     OpenAIAudioTranscriptionOptionalParams,
 )
-from litellm.types.utils import FileTypes
+from litellm.types.utils import FileTypes, TranscriptionResponse
 
 from ..common_utils import OpenAIError
 
 
 class OpenAIWhisperAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIAudioTranscriptionOptionalParams]:
+    def get_complete_url(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+        model: str,
+        optional_params: dict,
+        litellm_params: dict,
+        stream: bool | None = None,
+    ) -> str:
+        """
+        OPTIONAL
+
+        Get the complete url for the request
+
+        Some providers need `model` in `api_base`
+        """
+        ## get the api base, attach the endpoint - v1/audio/transcriptions
+        # strip trailing slash if present
+        api_base = api_base.rstrip("/") if api_base else ""
+
+        # if endswith "/v1"
+        if api_base and api_base.endswith("/v1"):
+            api_base = f"{api_base}/audio/transcriptions"
+        else:
+            api_base = f"{api_base}/v1/audio/transcriptions"
+
+        return api_base or ""
+
+    def get_supported_openai_params(self, model: str) -> list[OpenAIAudioTranscriptionOptionalParams]:
         """
         Get the supported OpenAI params for the `whisper-1` models
         """
@@ -41,7 +69,7 @@ class OpenAIWhisperAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         """
         Map the OpenAI params to the Whisper params
         """
-        supported_params = self.get_supported_openai_params(model)
+        supported_params: Final = self.get_supported_openai_params(model)
         for k, v in non_default_params.items():
             if k in supported_params:
                 optional_params[k] = v
@@ -51,15 +79,15 @@ class OpenAIWhisperAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         api_key = api_key or get_secret_str("OPENAI_API_KEY")
 
-        auth_header = {
+        auth_header: Final = {
             "Authorization": f"Bearer {api_key}",
         }
 
@@ -72,27 +100,42 @@ class OpenAIWhisperAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         audio_file: FileTypes,
         optional_params: dict,
         litellm_params: dict,
-    ) -> dict:
+    ) -> AudioTranscriptionRequestData:
         """
         Transform the audio transcription request
         """
+        data: Final = {"model": model, "file": audio_file, **optional_params}
 
-        data = {"model": model, "file": audio_file, **optional_params}
+        if "response_format" not in data:
+            data["response_format"] = "verbose_json"  # ensures 'duration' is received - used for cost calculation
 
-        if "response_format" not in data or (
-            data["response_format"] == "text" or data["response_format"] == "json"
-        ):
-            data[
-                "response_format"
-            ] = "verbose_json"  # ensures 'duration' is received - used for cost calculation
+        return AudioTranscriptionRequestData(
+            data=data,
+        )
 
-        return data
-
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
         return OpenAIError(
             status_code=status_code,
             message=error_message,
             headers=headers,
         )
+
+    def transform_audio_transcription_response(
+        self,
+        raw_response: Response,
+    ) -> TranscriptionResponse:
+        try:
+            raw_response_json: Final = raw_response.json()
+        except json.JSONDecodeError:
+            content_type: Final = raw_response.headers.get("content-type", "").lower()
+            if "application/json" in content_type:
+                raise
+            return TranscriptionResponse(text=raw_response.text)
+
+        if any(key in raw_response_json for key in TranscriptionResponse.model_fields):
+            return TranscriptionResponse(**raw_response_json)
+        else:
+            raise ValueError(
+                "Invalid response format. Received response does not match the expected format. Got: ",
+                raw_response_json,
+            )
